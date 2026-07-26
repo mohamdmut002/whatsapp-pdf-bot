@@ -4,7 +4,7 @@ whatsapp_pdf_bot_v2.py
 Production version: persistent sessions (SQLite), background processing,
 and automatic car-plate detection (via Google Cloud Vision OCR) to name
 the PDF -- with a manual fallback if detection fails or is disabled.
-hi test
+
 Install:
     pip install flask twilio requests reportlab pillow google-cloud-vision
 
