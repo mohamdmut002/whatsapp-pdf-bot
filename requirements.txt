@@ -1,0 +1,7 @@
+flask
+twilio
+requests
+reportlab
+pillow
+gunicorn
+google-cloud-vision
