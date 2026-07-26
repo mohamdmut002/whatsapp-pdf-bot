@@ -32,11 +32,11 @@ from reportlab.lib.utils import ImageReader
 from PIL import Image
 
 # ---- Config (read from environment variables — set these in Railway) ----
-TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
+TWILIO_AUTH_TOKEN = os.environ["63ba4fc402778bfd014a64e75fe664aa"]
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
 PUBLIC_BASE_URL = os.environ["PUBLIC_BASE_URL"]
-USE_OCR = os.environ.get("USE_OCR", "true").lower() == "true"
+USE_OCR = os.environ.get("USE_OCR", "false").lower() == "true"
 
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
