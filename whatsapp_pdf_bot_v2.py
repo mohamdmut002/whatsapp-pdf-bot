@@ -279,7 +279,7 @@ def serve_output(filename):
     return send_from_directory(OUTPUT_DIR, filename)
 
 
- init_db()
+  init_db()
 
    if __name__ == "__main__":
        port = int(os.environ.get("PORT", 5000))
