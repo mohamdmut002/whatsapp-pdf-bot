@@ -24,6 +24,7 @@ import sqlite3
 import threading
 import requests
 from flask import Flask, request, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
@@ -48,6 +49,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 validator = RequestValidator(TWILIO_AUTH_TOKEN)
 
@@ -244,6 +246,7 @@ def webhook():
     signature = request.headers.get("X-Twilio-Signature", "")
     url = request.url
     if not validator.validate(url, request.form, signature):
+        print(f"Rejected webhook: signature check failed for url={url}")
         return ("Forbidden", 403)
 
     from_number = request.form.get("From")
