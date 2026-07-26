@@ -1,5 +1,5 @@
 """
-whatsapp_pdf_bot_v2.py 
+whatsapp_pdf_bot_v2.py
 -----------------------
 Production version: persistent sessions (SQLite), background processing,
 and automatic car-plate detection (via Google Cloud Vision OCR) to name
@@ -19,12 +19,14 @@ Google Vision setup (optional but recommended for auto plate detection):
 
 import os
 import re
+import uuid
 import sqlite3
 import threading
 import requests
 from flask import Flask, request, send_from_directory
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
+from twilio.request_validator import RequestValidator
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
@@ -47,6 +49,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = Flask(__name__)
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+validator = RequestValidator(TWILIO_AUTH_TOKEN)
 
 if USE_OCR:
     from google.cloud import vision
@@ -145,7 +148,7 @@ def detect_plate(image_path):
 def build_pdf(entries, output_path):
     page_width, page_height = A4
     c = canvas.Canvas(output_path, pagesize=A4)
-    margin = 2 * cm
+    margin = 1 * cm  # smaller margin = more room for the photo
 
     for entry in entries:
         img = Image.open(entry["image_path"])
@@ -153,13 +156,16 @@ def build_pdf(entries, output_path):
         aspect = img_h / img_w
         draw_width = page_width - 2 * margin
         draw_height = draw_width * aspect
-        max_h = 15 * cm
+
+        # Leave a little room at the bottom for the caption text
+        max_h = page_height - 3 * cm
         if draw_height > max_h:
             draw_height = max_h
             draw_width = draw_height / aspect
 
+        img_x = (page_width - draw_width) / 2  # center the image horizontally
         img_y = page_height - margin - draw_height
-        c.drawImage(ImageReader(img), margin, img_y, width=draw_width, height=draw_height)
+        c.drawImage(ImageReader(img), img_x, img_y, width=draw_width, height=draw_height)
 
         c.setFont("Helvetica", 11)
         text_y = img_y - 1 * cm
@@ -175,6 +181,11 @@ def build_pdf(entries, output_path):
 def safe_filename(name):
     name = re.sub(r"[^A-Za-z0-9_\-]", "_", name.strip())
     return name or "document"
+
+
+def bilingual(english, arabic):
+    """Combine an English and Arabic version of a message into one reply."""
+    return f"{english}\n\n{arabic}"
 
 
 # ---------------- Background workers ----------------
@@ -202,8 +213,13 @@ def process_incoming_media(phone, media_url, caption):
 def finalize_pdf(phone, filename_choice):
     """Runs in background: build PDF and send it back via WhatsApp."""
     entries = get_entries(phone)
-    safe_name = safe_filename(filename_choice)
-    output_filename = f"{safe_name}.pdf"
+    friendly_name = safe_filename(filename_choice)  # what the user sees, e.g. "mutasim-93019"
+
+    # The actual file on disk / in the URL uses a random, unguessable name.
+    # This stops anyone from finding or downloading someone else's PDF by
+    # guessing plate numbers or names in the URL.
+    secret_id = uuid.uuid4().hex
+    output_filename = f"{secret_id}.pdf"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     build_pdf(entries, output_path)
 
@@ -211,7 +227,10 @@ def finalize_pdf(phone, filename_choice):
     client.messages.create(
         from_=TWILIO_WHATSAPP_NUMBER,
         to=phone,
-        body=f"Here's your PDF: {output_filename}",
+        body=bilingual(
+            f"Here's your PDF: {friendly_name}.pdf",
+            f"إليك ملفك: {friendly_name}.pdf",
+        ),
         media_url=[pdf_public_url],
     )
     clear_session(phone)
@@ -221,6 +240,12 @@ def finalize_pdf(phone, filename_choice):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # Reject anything that isn't really from Twilio
+    signature = request.headers.get("X-Twilio-Signature", "")
+    url = request.url
+    if not validator.validate(url, request.form, signature):
+        return ("Forbidden", 403)
+
     from_number = request.form.get("From")
     body = (request.form.get("Body") or "").strip()
     num_media = int(request.form.get("NumMedia", 0))
@@ -236,7 +261,11 @@ def webhook():
             chosen_name = body
         else:
             chosen_name = "document"
-        resp.message(f"Got it — building your PDF as '{safe_filename(chosen_name)}.pdf'...")
+        clean_name = safe_filename(chosen_name)
+        resp.message(bilingual(
+            f"Got it — building your PDF as '{clean_name}.pdf'...",
+            f"تم الاستلام — جارٍ إنشاء ملف PDF باسم '{clean_name}.pdf'...",
+        ))
         threading.Thread(target=finalize_pdf, args=(from_number, chosen_name)).start()
         return str(resp)
 
@@ -244,19 +273,27 @@ def webhook():
     if body.lower() == "done":
         entries = get_entries(from_number)
         if not entries:
-            resp.message("You haven't sent any photos yet. Send some first!")
+            resp.message(bilingual(
+                "You haven't sent any photos yet. Send some first!",
+                "لم ترسل أي صور بعد. أرسل بعض الصور أولاً!",
+            ))
             return str(resp)
 
         plate = session.get("detected_plate")
         if plate:
             update_session(from_number, state="awaiting_filename")
-            resp.message(
+            resp.message(bilingual(
                 f"I detected plate number *{plate}* in your photos. "
-                f"Reply 'yes' to use it as the filename, or type a different name."
-            )
+                f"Reply 'yes' to use it as the filename, or type a different name.",
+                f"لقد اكتشفت رقم اللوحة *{plate}* في صورك. "
+                f"اكتب 'yes' لاستخدامه كاسم للملف، أو اكتب اسمًا مختلفًا.",
+            ))
         else:
             update_session(from_number, state="awaiting_filename")
-            resp.message("What would you like to name this PDF?")
+            resp.message(bilingual(
+                "What would you like to name this PDF?",
+                "ما الاسم الذي تريد إعطاءه لهذا الملف؟",
+            ))
         return str(resp)
 
     # --- Incoming photo(s) ---
@@ -267,10 +304,16 @@ def webhook():
                 target=process_incoming_media, args=(from_number, media_url, body)
             ).start()
         count = len(get_entries(from_number)) + num_media
-        resp.message(f"Got it (~{count} photo(s) so far). Send more, or reply 'done' when finished.")
+        resp.message(bilingual(
+            f"Got it (~{count} photo(s) so far). Send more, or reply 'done' when finished.",
+            f"تم الاستلام (~{count} صورة حتى الآن). أرسل المزيد، أو اكتب 'done' عند الانتهاء.",
+        ))
         return str(resp)
 
-    resp.message("Send me photos (with optional captions), then reply 'done' when finished.")
+    resp.message(bilingual(
+        "Send me photos (with optional captions), then reply 'done' when finished.",
+        "أرسل لي الصور (مع تعليق اختياري إن أردت)، ثم اكتب 'done' عند الانتهاء.",
+    ))
     return str(resp)
 
 
